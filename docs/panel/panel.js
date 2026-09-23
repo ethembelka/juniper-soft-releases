@@ -14,7 +14,8 @@ import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
-  getFirestore, collection, getDocs, doc, updateDoc, serverTimestamp,
+  getFirestore, collection, getDocs, doc, getDoc, setDoc, updateDoc, deleteDoc,
+  serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const CONFIG = {
@@ -32,6 +33,11 @@ const MODULES = [
 ];
 // Değişince müşterinin token'ı bayatlar (offline doğrulama eski değeri taşır)
 const TOKEN_FIELDS = new Set([...MODULES.map(m => m[0]), "valid_until", "status"]);
+
+// Token imzalama servisi (Cloudflare Worker). Gizli anahtar ORADA durur;
+// panel yalnız "şu lisansı imzala" der ve dönen token'ı Firestore'a yazar.
+const SIGNER_DEFAULT = "";
+const signerUrl = () => (localStorage.getItem("juniper_signer") || SIGNER_DEFAULT).replace(/\/$/, "");
 
 const app = initializeApp(CONFIG);
 const auth = getAuth(app);
@@ -92,6 +98,11 @@ function render() {
   const stale = LICENCES.filter(l => l.token_reissue_needed).length;
   $("warnStale").hidden = !stale;
   $("staleCount").textContent = stale;
+  const signer = signerUrl();
+  $("btnStaleAll").disabled = !signer;
+  $("signerInfo").textContent = signer
+    ? "İmzalama servisi: " + signer
+    : "İmzalama servisi tanımlı değil — üstteki ⚙ Servis düğmesinden adresi girin.";
   $("count").textContent = rows.length + " / " + LICENCES.length + " lisans";
   $("list").innerHTML = rows.length ? rows.map(card).join("")
     : '<div class="empty">Eşleşen lisans yok.</div>';
@@ -135,6 +146,10 @@ function openEdit(id) {
     ["Son çevrimiçi giriş", fmt(current.last_online_auth)],
     ["Token", current.license_token ? (current.token_reissue_needed ? "var (yenilenmeli)" : "var") : "yok"],
   ].map(([k, v]) => "<div><span>" + k + "</span><b>" + esc(v) + "</b></div>").join("");
+  const signer = signerUrl();
+  $("btnToken").disabled = !signer || !current.machine_id;
+  $("btnToken").title = !signer ? "Önce ⚙ Servis adresini girin"
+    : (!current.machine_id ? "Lisans henüz aktive edilmedi" : "");
   $("editErr").textContent = ""; $("editOk").textContent = "";
   $("editOverlay").hidden = false;
 }
@@ -145,6 +160,159 @@ const fmt = v => {
 };
 $("btnClose").addEventListener("click", () => { $("editOverlay").hidden = true; });
 $("editOverlay").addEventListener("click", e => { if (e.target === $("editOverlay")) $("editOverlay").hidden = true; });
+
+// ── Token imzalama (Cloudflare Worker) ──────────────────────────────────────
+// Gizli Ed25519 anahtarı tarayıcıya KONULAMAZ; servis imzalar, yazmayı panel yapar.
+// Yazma yetkisi yöneticinin Firestore oturumundan gelir → serviste servis hesabı yok.
+async function signToken(licenseKey) {
+  const base = signerUrl();
+  if (!base) throw new Error("İmzalama servisi tanımlı değil (⚙ Servis ayarı).");
+  const idt = await auth.currentUser.getIdToken();
+  const r = await fetch(base + "/sign", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer " + idt },
+    body: JSON.stringify({ licenseKey }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || ("servis " + r.status));
+  return d.token;
+}
+
+async function reissue(licenseKey) {
+  const token = await signToken(licenseKey);
+  await updateDoc(doc(db, "licences", licenseKey),
+                  { license_token: token, token_reissue_needed: false,
+                    token_issued_at: serverTimestamp() });
+  const l = LICENCES.find(x => x.id === licenseKey);
+  if (l) { l.license_token = token; l.token_reissue_needed = false; }
+}
+
+$("btnToken").addEventListener("click", async () => {
+  if (!current) return;
+  $("editErr").textContent = ""; $("editOk").textContent = "";
+  $("btnToken").disabled = true;
+  try {
+    await reissue(current.id);
+    $("editOk").textContent = "✓ Token yeniden imzalandı";
+    openEdit(current.id); render();
+  } catch (e) { $("editErr").textContent = "Token: " + e.message; }
+  finally { $("btnToken").disabled = false; }
+});
+
+$("btnStaleAll").addEventListener("click", async () => {
+  const list = LICENCES.filter(l => l.token_reissue_needed);
+  $("btnStaleAll").disabled = true;
+  const fails = [];
+  for (const l of list) {
+    try { await reissue(l.id); } catch (e) { fails.push(l.id + ": " + e.message); }
+  }
+  $("btnStaleAll").disabled = false;
+  render();
+  if (fails.length) alert("Bazıları imzalanamadı:\n" + fails.join("\n"));
+});
+
+$("btnSigner").addEventListener("click", () => {
+  const v = prompt("İmzalama servisinin adresi (Cloudflare Worker):", signerUrl());
+  if (v === null) return;
+  const t = v.trim();
+  if (t && !/^https:\/\//.test(t)) { alert("Adres https:// ile başlamalı."); return; }
+  if (t) localStorage.setItem("juniper_signer", t);
+  else localStorage.removeItem("juniper_signer");
+  render();
+});
+
+// ── Şifre belirleme (werkzeug pbkdf2 biçimi) ────────────────────────────────
+// Uygulama tarafı werkzeug.check_password_hash ile doğrular; biçim birebir aynı olmalı:
+//   pbkdf2:sha256:<tur>$<tuz>$<hex özet>
+async function werkzeugHash(password, iterations = 600000) {
+  const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const rnd = crypto.getRandomValues(new Uint8Array(16));
+  const salt = Array.from(rnd, b => alphabet[b % alphabet.length]).join("");
+  const enc = new TextEncoder();
+  const base = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: enc.encode(salt), iterations, hash: "SHA-256" }, base, 256);
+  const hex = Array.from(new Uint8Array(bits), b => b.toString(16).padStart(2, "0")).join("");
+  return `pbkdf2:sha256:${iterations}$${salt}$${hex}`;
+}
+
+$("btnPass").addEventListener("click", async () => {
+  if (!current) return;
+  const pw = prompt("Bu lisans için yeni şifre (en az 6 karakter):");
+  if (pw === null) return;
+  if (pw.length < 6) { alert("Şifre en az 6 karakter olmalı."); return; }
+  $("btnPass").disabled = true;
+  try {
+    await updateDoc(doc(db, "licences", current.id),
+                    { password_hash: await werkzeugHash(pw), updated_at: serverTimestamp() });
+    $("editOk").textContent = "✓ Şifre güncellendi";
+  } catch (e) { $("editErr").textContent = "Şifre: " + (e.code || e.message); }
+  finally { $("btnPass").disabled = false; }
+});
+
+// ── Makine sıfırlama ────────────────────────────────────────────────────────
+// Müşteri bilgisayar değiştirdiğinde. Token da TEMİZLENİR: eski token eski makineye
+// bağlıdır, kalırsa yeni makinede çalışmaz ama eski makinede çalışmaya devam eder.
+$("btnReset").addEventListener("click", async () => {
+  if (!current) return;
+  if (!confirm(`${current.customer_name || current.id}\n\nMakine kaydı silinsin mi? ` +
+               "Program bir sonraki açılışta hangi bilgisayarda çalışıyorsa ona bağlanır.")) return;
+  try {
+    await updateDoc(doc(db, "licences", current.id), {
+      machine_id: "", fingerprint: {}, license_token: "",
+      token_reissue_needed: false, activated_at: "", updated_at: serverTimestamp(),
+    });
+    Object.assign(current, { machine_id: "", license_token: "", token_reissue_needed: false });
+    $("editOk").textContent = "✓ Makine kaydı silindi";
+    openEdit(current.id); render();
+  } catch (e) { $("editErr").textContent = "Sıfırlama: " + (e.code || e.message); }
+});
+
+// ── Lisans silme ────────────────────────────────────────────────────────────
+$("btnDelete").addEventListener("click", async () => {
+  if (!current) return;
+  const name = current.customer_name || current.id;
+  if (prompt(`"${name}" lisansı KALICI olarak silinecek.\n` +
+             `Onaylamak için lisans anahtarını yazın:\n${current.id}`) !== current.id) return;
+  try {
+    await deleteDoc(doc(db, "licences", current.id));
+    LICENCES = LICENCES.filter(l => l.id !== current.id);
+    current = null;
+    $("editOverlay").hidden = true;
+    render();
+  } catch (e) { $("editErr").textContent = "Silme: " + (e.code || e.message); }
+});
+
+// ── Yeni lisans ─────────────────────────────────────────────────────────────
+function newKey() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";            // karışan harfler yok (O/0, I/1)
+  const part = n => Array.from(crypto.getRandomValues(new Uint8Array(n)),
+                               b => chars[b % chars.length]).join("");
+  return `JUNIPER-${part(4)}-${part(4)}-${part(4)}`;
+}
+
+$("btnNew").addEventListener("click", async () => {
+  const name = prompt("Yeni lisans — müşteri adı:");
+  if (!name) return;
+  const key = newKey();
+  const fresh = {
+    customer_name: name.trim(), username: "", password_hash: "", status: "active",
+    machine_id: "", activated_at: "", fingerprint: {}, license_token: "",
+    company: {}, valid_until: "", last_online_auth: "",
+    module_order_history: false, module_history_edit: false,
+    module_pricing: false, module_cnc: false, token_reissue_needed: false,
+    total_pdfs_uploaded: 0, total_labels_printed: 0, notes: "",
+    created_at: serverTimestamp(),
+  };
+  try {
+    await setDoc(doc(db, "licences", key), fresh);
+    const snap = await getDoc(doc(db, "licences", key));
+    LICENCES.push({ id: key, ...snap.data() });
+    render();
+    openEdit(key);
+    $("editOk").textContent = "✓ Lisans oluşturuldu — anahtar: " + key;
+  } catch (e) { alert("Oluşturulamadı: " + (e.code || e.message)); }
+});
 
 $("btnSave").addEventListener("click", async () => {
   if (!current) return;

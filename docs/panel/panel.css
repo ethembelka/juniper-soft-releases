@@ -90,6 +90,10 @@ label input,label select{margin-top:5px}
   padding-top:14px;border-top:1px solid var(--line);font-size:12px}
 .meta span{color:var(--muted);margin-right:6px}
 .meta b{font-weight:600;word-break:break-all}
+.edit-ops{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px;padding-top:14px;
+  border-top:1px solid var(--line)}
+.btn.danger{border-color:rgba(239,68,68,.5);color:#fca5a5}
+.btn.danger:hover{background:rgba(239,68,68,.15);border-color:var(--err)}
 .edit-foot{display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:18px}
 
 @media (max-width:640px){
