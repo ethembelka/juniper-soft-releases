@@ -44,12 +44,20 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 const $ = id => document.getElementById(id);
+/* Tek bir eksik element TÜM modülü düşürmesin: modül üstü bir TypeError, ondan
+   sonraki bütün olay bağlantılarını iptal eder (bir kez oldu: eksik bir düğme
+   yüzünden panelin hiçbir düğmesi çalışmadı). */
+const on = (id, ev, fn) => {
+  const el = $(id);
+  if (el) el.addEventListener(ev, fn);
+  else console.warn("panel: #" + id + " bulunamadı, bağlanmadı");
+};
 const esc = s => { const d = document.createElement("div"); d.textContent = s == null ? "" : String(s); return d.innerHTML; };
 let LICENCES = [];
 let current = null;
 
 // ── Giriş ───────────────────────────────────────────────────────────────────
-$("loginForm").addEventListener("submit", async e => {
+on("loginForm", "submit", async e => {
   e.preventDefault();
   $("loginErr").textContent = "";
   try {
@@ -63,7 +71,7 @@ $("loginForm").addEventListener("submit", async e => {
     })[err.code] || ("Giriş yapılamadı: " + err.code);
   }
 });
-$("btnLogout").addEventListener("click", () => signOut(auth));
+on("btnLogout", "click", () => signOut(auth));
 
 onAuthStateChanged(auth, user => {
   $("loginView").hidden = !!user;
@@ -85,9 +93,9 @@ async function load() {
       + 'erişimi engelliyordur.<br><small>' + esc(err.code || err.message) + "</small></div>";
   }
 }
-$("btnReload").addEventListener("click", load);
-$("search").addEventListener("input", render);
-$("statusFilter").addEventListener("change", render);
+on("btnReload", "click", load);
+on("search", "input", render);
+on("statusFilter", "change", render);
 
 function render() {
   const q = $("search").value.trim().toLocaleLowerCase("tr");
@@ -158,8 +166,8 @@ const fmt = v => {
   const s = typeof v === "object" && v.seconds ? new Date(v.seconds * 1000).toISOString() : String(v);
   return s.replace("T", " ").slice(0, 16);
 };
-$("btnClose").addEventListener("click", () => { $("editOverlay").hidden = true; });
-$("editOverlay").addEventListener("click", e => { if (e.target === $("editOverlay")) $("editOverlay").hidden = true; });
+on("btnClose", "click", () => { $("editOverlay").hidden = true; });
+on("editOverlay", "click", e => { if (e.target === $("editOverlay")) $("editOverlay").hidden = true; });
 
 // ── Token imzalama (Cloudflare Worker) ──────────────────────────────────────
 // Gizli Ed25519 anahtarı tarayıcıya KONULAMAZ; servis imzalar, yazmayı panel yapar.
@@ -187,7 +195,7 @@ async function reissue(licenseKey) {
   if (l) { l.license_token = token; l.token_reissue_needed = false; }
 }
 
-$("btnToken").addEventListener("click", async () => {
+on("btnToken", "click", async () => {
   if (!current) return;
   $("editErr").textContent = ""; $("editOk").textContent = "";
   $("btnToken").disabled = true;
@@ -199,7 +207,7 @@ $("btnToken").addEventListener("click", async () => {
   finally { $("btnToken").disabled = false; }
 });
 
-$("btnStaleAll").addEventListener("click", async () => {
+on("btnStaleAll", "click", async () => {
   const list = LICENCES.filter(l => l.token_reissue_needed);
   $("btnStaleAll").disabled = true;
   const fails = [];
@@ -211,7 +219,7 @@ $("btnStaleAll").addEventListener("click", async () => {
   if (fails.length) alert("Bazıları imzalanamadı:\n" + fails.join("\n"));
 });
 
-$("btnSigner").addEventListener("click", () => {
+on("btnSigner", "click", () => {
   const v = prompt("İmzalama servisinin adresi (Cloudflare Worker):", signerUrl());
   if (v === null) return;
   const t = v.trim();
@@ -236,7 +244,7 @@ async function werkzeugHash(password, iterations = 600000) {
   return `pbkdf2:sha256:${iterations}$${salt}$${hex}`;
 }
 
-$("btnPass").addEventListener("click", async () => {
+on("btnPass", "click", async () => {
   if (!current) return;
   const pw = prompt("Bu lisans için yeni şifre (en az 6 karakter):");
   if (pw === null) return;
@@ -253,7 +261,7 @@ $("btnPass").addEventListener("click", async () => {
 // ── Makine sıfırlama ────────────────────────────────────────────────────────
 // Müşteri bilgisayar değiştirdiğinde. Token da TEMİZLENİR: eski token eski makineye
 // bağlıdır, kalırsa yeni makinede çalışmaz ama eski makinede çalışmaya devam eder.
-$("btnReset").addEventListener("click", async () => {
+on("btnReset", "click", async () => {
   if (!current) return;
   if (!confirm(`${current.customer_name || current.id}\n\nMakine kaydı silinsin mi? ` +
                "Program bir sonraki açılışta hangi bilgisayarda çalışıyorsa ona bağlanır.")) return;
@@ -269,7 +277,7 @@ $("btnReset").addEventListener("click", async () => {
 });
 
 // ── Lisans silme ────────────────────────────────────────────────────────────
-$("btnDelete").addEventListener("click", async () => {
+on("btnDelete", "click", async () => {
   if (!current) return;
   const name = current.customer_name || current.id;
   if (prompt(`"${name}" lisansı KALICI olarak silinecek.\n` +
@@ -291,7 +299,7 @@ function newKey() {
   return `JUNIPER-${part(4)}-${part(4)}-${part(4)}`;
 }
 
-$("btnNew").addEventListener("click", async () => {
+on("btnNew", "click", async () => {
   const name = prompt("Yeni lisans — müşteri adı:");
   if (!name) return;
   const key = newKey();
@@ -314,7 +322,7 @@ $("btnNew").addEventListener("click", async () => {
   } catch (e) { alert("Oluşturulamadı: " + (e.code || e.message)); }
 });
 
-$("btnSave").addEventListener("click", async () => {
+on("btnSave", "click", async () => {
   if (!current) return;
   const vu = $("fValidUntil").value.trim();
   if (vu && !/^\d{4}-\d{2}-\d{2}$/.test(vu)) {

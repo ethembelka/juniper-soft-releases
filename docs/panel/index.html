@@ -58,9 +58,11 @@
   </section>
 
   <section id="warnStale" class="warn" hidden>
-    <b>Token yenilenmeli.</b> Modül ya da süre değiştirdiğiniz lisanslar var
-    (<span id="staleCount">0</span>). Değişikliğin internetsiz çalışan müşteriye de
-    geçmesi için yönetici bilgisayarında <code>admin\run.bat</code> → <b>Token yenile</b>.
+    <b>Token yenilenmeli.</b> Modül, süre ya da durum değiştirdiğiniz
+    <span id="staleCount">0</span> lisans var. Değişikliğin internetsiz çalışan
+    müşteriye de geçmesi için token yeniden imzalanmalı.
+    <button class="btn" id="btnStaleAll" style="margin-left:10px">Hepsini imzala</button>
+    <div class="muted small" id="signerInfo" style="margin-top:6px"></div>
   </section>
 
   <section class="list" id="list"></section>
