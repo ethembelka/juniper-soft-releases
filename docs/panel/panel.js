@@ -147,12 +147,19 @@ function openEdit(id) {
   $("coAddress").value = co.address || "";
   $("mods").innerHTML = MODULES.map(([k, lbl]) =>
     '<label class="mod"><input type="checkbox" data-mod="' + k + '"' + (current[k] ? " checked" : "") + "><span>" + lbl + "</span></label>").join("");
+  $("fNotes").value = current.notes || "";
+  $("rawDoc").textContent = rawView(current);
   $("meta").innerHTML = [
     ["Makine", current.machine_id || "—"],
     ["Yüklenen PDF / etiket", (current.total_pdfs_uploaded || 0) + " / " + (current.total_labels_printed || 0)],
     ["Aktivasyon", fmt(current.activated_at)],
     ["Son çevrimiçi giriş", fmt(current.last_online_auth)],
     ["Token", current.license_token ? (current.token_reissue_needed ? "var (yenilenmeli)" : "var") : "yok"],
+    ["Token imzalandı", fmt(current.token_issued_at)],
+    ["Giriş şifresi", current.password_hash ? "tanımlı" : "yok"],
+    ["Parmak izi", Object.keys(current.fingerprint || {}).length
+       ? Object.entries(current.fingerprint).map(([k, v]) => k + "=" + v).join(" · ") : "yok"],
+    ["Oluşturma", fmt(current.created_at)],
   ].map(([k, v]) => "<div><span>" + k + "</span><b>" + esc(v) + "</b></div>").join("");
   const signer = signerUrl();
   $("btnToken").disabled = !signer || !current.machine_id;
@@ -161,6 +168,18 @@ function openEdit(id) {
   $("editErr").textContent = ""; $("editOk").textContent = "";
   $("editOverlay").hidden = false;
 }
+function rawView(lic) {
+  const out = {};
+  for (const k of Object.keys(lic).sort()) {
+    const v = lic[k];
+    if (k === "password_hash") out[k] = v ? "(tanımlı — gösterilmiyor)" : "";
+    else if (k === "license_token" && v) out[k] = String(v).slice(0, 24) + "… (" + v.length + " karakter)";
+    else if (v && typeof v === "object" && v.seconds) out[k] = fmt(v);
+    else out[k] = v;
+  }
+  return JSON.stringify(out, null, 2);
+}
+
 const fmt = v => {
   if (!v) return "—";
   const s = typeof v === "object" && v.seconds ? new Date(v.seconds * 1000).toISOString() : String(v);
@@ -333,6 +352,7 @@ on("btnSave", "click", async () => {
     username: $("fUsername").value.trim(),
     status: $("fStatus").value,
     valid_until: vu,
+    notes: $("fNotes").value.trim(),
     company: {
       name: $("coName").value.trim(), phone: $("coPhone").value.trim(),
       email: $("coEmail").value.trim(), web: $("coWeb").value.trim(),
