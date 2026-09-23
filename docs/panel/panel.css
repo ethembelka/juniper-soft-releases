@@ -5,6 +5,9 @@
   --ok:#22c55e; --warn:#f59e0b; --err:#ef4444;
 }
 *{box-sizing:border-box}
+/* KRİTİK: display:flex/grid kuralları `hidden` özniteliğini ezer —
+   bu satır olmazsa giriş ekranı ve düzenleme penceresi açılışta görünür. */
+[hidden]{display:none !important}
 body{margin:0;background:var(--bg);color:var(--txt);
   font:14px/1.5 "Segoe UI",system-ui,-apple-system,sans-serif}
 h1,h2,h3{margin:0 0 8px}
