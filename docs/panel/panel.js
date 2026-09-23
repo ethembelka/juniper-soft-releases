@@ -127,7 +127,8 @@ function card(l) {
     + '<div class="chips">' + mods + (l.token_reissue_needed ? '<span class="chip warn">token yenilenmeli</span>' : "") + "</div></div>"
     + '<div class="row-side"><span class="pill ' + status + '">' + label(status) + "</span>"
     + '<span class="muted">' + (l.valid_until ? esc(String(l.valid_until).slice(0, 10)) : "süresiz") + "</span>"
-    + '<span class="muted small">' + (l.machine_id ? "kurulu" : "aktive edilmedi") + "</span></div></article>";
+    + '<span class="muted small">' + (l.machine_id ? "kurulu" : "aktive edilmedi") + "</span>"
+    + '<span class="muted small">son giriş: ' + esc(fmt(l.last_online_auth)) + "</span></div></article>";
 }
 const label = s => ({ active: "Aktif", suspended: "Askıda", revoked: "İptal" })[s] || s;
 
@@ -180,10 +181,13 @@ function rawView(lic) {
   return JSON.stringify(out, null, 2);
 }
 
+// Tarih + SAAT, yerel saatte (Türkiye). Firestore Timestamp ya da ISO metin gelebilir.
 const fmt = v => {
   if (!v) return "—";
-  const s = typeof v === "object" && v.seconds ? new Date(v.seconds * 1000).toISOString() : String(v);
-  return s.replace("T", " ").slice(0, 16);
+  const d = typeof v === "object" && v.seconds ? new Date(v.seconds * 1000) : new Date(String(v));
+  if (isNaN(d)) return String(v).replace("T", " ").slice(0, 16);
+  return d.toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric",
+                                     hour: "2-digit", minute: "2-digit" });
 };
 on("btnClose", "click", () => { $("editOverlay").hidden = true; });
 on("editOverlay", "click", e => { if (e.target === $("editOverlay")) $("editOverlay").hidden = true; });
