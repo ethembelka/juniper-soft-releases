@@ -77,7 +77,10 @@
     </div>
     <div class="grid">
       <label>Müşteri adı<input class="input" id="fCustomer" /></label>
-      <label>Kullanıcı adı<input class="input" id="fUsername" /></label>
+      <label>Kullanıcı adı <small>müşterinin programa girişi</small><input class="input" id="fUsername" autocomplete="off" /></label>
+      <label>Giriş şifresi <small id="pwState"></small>
+        <span class="pw-wrap"><input class="input" id="fPassword" type="password" autocomplete="new-password" />
+        <button type="button" class="pw-eye" id="pwEye" title="Göster / gizle">göster</button></span></label>
       <label>Durum
         <select class="input" id="fStatus">
           <option value="active">Aktif</option>
@@ -110,7 +113,6 @@
 
     <div class="edit-ops">
       <button class="btn" id="btnToken">🔏 Token'ı yeniden imzala</button>
-      <button class="btn" id="btnPass">Şifre belirle</button>
       <button class="btn" id="btnReset">Makineyi sıfırla</button>
       <button class="btn danger" id="btnDelete">Lisansı sil</button>
     </div>

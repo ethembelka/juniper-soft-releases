@@ -106,3 +106,11 @@ label input,label select{margin-top:5px}
   .row{flex-direction:column;align-items:flex-start}
   .row-side{align-items:flex-start}
 }
+
+/* Giriş şifresi alanı */
+.pw-wrap{position:relative;display:block;margin-top:5px}
+.pw-wrap .input{margin-top:0;padding-right:64px}
+.pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:0;background:transparent;
+  color:var(--accent);font:600 12px inherit;cursor:pointer;padding:4px 6px}
+#pwState.ok{color:var(--ok)} #pwState.bad{color:var(--err)}
+.chip.bad{background:rgba(239,68,68,.15);border-color:rgba(239,68,68,.5);color:#f87171}

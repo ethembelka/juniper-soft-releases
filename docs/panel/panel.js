@@ -124,7 +124,9 @@ function card(l) {
   return '<article class="row" data-open="' + esc(l.id) + '">'
     + '<div class="row-main"><b>' + esc(l.customer_name || "(isimsiz)") + "</b>"
     + '<span class="key">' + esc(l.id) + "</span>"
-    + '<div class="chips">' + mods + (l.token_reissue_needed ? '<span class="chip warn">token yenilenmeli</span>' : "") + "</div></div>"
+    + '<div class="chips">' + mods
+    + (!l.password_hash ? '<span class="chip bad" title="Müşteri programa giriş yapamaz">şifre yok</span>' : "")
+    + (l.token_reissue_needed ? '<span class="chip warn">token yenilenmeli</span>' : "") + "</div></div>"
     + '<div class="row-side"><span class="pill ' + status + '">' + label(status) + "</span>"
     + '<span class="muted">' + (l.valid_until ? esc(String(l.valid_until).slice(0, 10)) : "süresiz") + "</span>"
     + '<span class="muted small">' + (l.machine_id ? "kurulu" : "aktive edilmedi") + "</span>"
@@ -140,6 +142,12 @@ function openEdit(id) {
   $("editSub").textContent = current.id;
   $("fCustomer").value = current.customer_name || "";
   $("fUsername").value = current.username || "";
+  $("fPassword").value = "";
+  $("fPassword").type = "password"; $("pwEye").textContent = "göster";
+  const hasPw = !!current.password_hash;
+  $("pwState").textContent = hasPw ? "· tanımlı" : "· YOK — müşteri giriş yapamaz";
+  $("pwState").className = hasPw ? "ok" : "bad";
+  $("fPassword").placeholder = hasPw ? "Değiştirmek için yeni şifre yazın" : "En az 6 karakter";
   $("fStatus").value = current.status || "active";
   $("fValidUntil").value = current.valid_until ? String(current.valid_until).slice(0, 10) : "";
   const co = current.company || {};
@@ -267,18 +275,9 @@ async function werkzeugHash(password, iterations = 600000) {
   return `pbkdf2:sha256:${iterations}$${salt}$${hex}`;
 }
 
-on("btnPass", "click", async () => {
-  if (!current) return;
-  const pw = prompt("Bu lisans için yeni şifre (en az 6 karakter):");
-  if (pw === null) return;
-  if (pw.length < 6) { alert("Şifre en az 6 karakter olmalı."); return; }
-  $("btnPass").disabled = true;
-  try {
-    await updateDoc(doc(db, "licences", current.id),
-                    { password_hash: await werkzeugHash(pw), updated_at: serverTimestamp() });
-    $("editOk").textContent = "✓ Şifre güncellendi";
-  } catch (e) { $("editErr").textContent = "Şifre: " + (e.code || e.message); }
-  finally { $("btnPass").disabled = false; }
+on("pwEye", "click", () => {
+  const i = $("fPassword"), show = i.type === "password";
+  i.type = show ? "text" : "password"; $("pwEye").textContent = show ? "gizle" : "göster";
 });
 
 // ── Makine sıfırlama ────────────────────────────────────────────────────────
@@ -341,7 +340,9 @@ on("btnNew", "click", async () => {
     LICENCES.push({ id: key, ...snap.data() });
     render();
     openEdit(key);
-    $("editOk").textContent = "✓ Lisans oluşturuldu — anahtar: " + key;
+    $("editOk").textContent = "✓ Lisans oluşturuldu: " + key;
+    $("editErr").textContent = "Şimdi kullanıcı adı ve şifre belirleyip Kaydet'e basın.";
+    $("fUsername").focus();
   } catch (e) { alert("Oluşturulamadı: " + (e.code || e.message)); }
 });
 
@@ -372,6 +373,12 @@ on("btnSave", "click", async () => {
     const nv = k === "company" ? JSON.stringify(v) : v;
     if (String(cur) !== String(nv)) changes[k] = v;
   }
+  // Giriş şifresi: yazıldıysa uygulamanın doğruladığı biçimde (werkzeug pbkdf2) özetlenir
+  const pw = $("fPassword").value;
+  if (pw) {
+    if (pw.length < 6) { $("editErr").textContent = "Şifre en az 6 karakter olmalı."; return; }
+    changes.password_hash = await werkzeugHash(pw);
+  }
   if (!Object.keys(changes).length) { $("editOk").textContent = "Değişiklik yok."; return; }
   if (Object.keys(changes).some(k => TOKEN_FIELDS.has(k)) && current.license_token) {
     changes.token_reissue_needed = true;      // yerel panel token'ı yenileyecek
@@ -380,8 +387,18 @@ on("btnSave", "click", async () => {
   try {
     $("btnSave").disabled = true;
     await updateDoc(doc(db, "licences", current.id), changes);
-    $("editOk").textContent = "✓ Kaydedildi" + (changes.token_reissue_needed ? " — token yenilenmeli" : "");
     Object.assign(current, next, { token_reissue_needed: !!changes.token_reissue_needed });
+    if (changes.password_hash) current.password_hash = changes.password_hash;
+    $("fPassword").value = "";
+    const hasPw = !!current.password_hash;
+    $("pwState").textContent = hasPw ? "· tanımlı" : "· YOK — müşteri giriş yapamaz";
+    $("pwState").className = hasPw ? "ok" : "bad";
+    $("fPassword").placeholder = hasPw ? "Değiştirmek için yeni şifre yazın" : "En az 6 karakter";
+    const miss = [!current.username && "kullanıcı adı", !hasPw && "şifre"].filter(Boolean);
+    $("editOk").textContent = "✓ Kaydedildi"
+      + (changes.password_hash ? " · şifre güncellendi" : "")
+      + (changes.token_reissue_needed ? " — token yenilenmeli" : "");
+    if (miss.length) $("editErr").textContent = "Müşteri giriş yapamaz: " + miss.join(" ve ") + " eksik.";
     render();
   } catch (err) {
     $("editErr").textContent = "Kaydedilemedi: " + (err.code || err.message);
