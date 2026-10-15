@@ -36,7 +36,7 @@ const TOKEN_FIELDS = new Set([...MODULES.map(m => m[0]), "valid_until", "status"
 
 // Token imzalama servisi (Cloudflare Worker). Gizli anahtar ORADA durur;
 // panel yalnız "şu lisansı imzala" der ve dönen token'ı Firestore'a yazar.
-const SIGNER_DEFAULT = "";
+const SIGNER_DEFAULT = "https://juniper-token-signer.ethembelkajunipersoft.workers.dev";
 const signerUrl = () => (localStorage.getItem("juniper_signer") || SIGNER_DEFAULT).replace(/\/$/, "");
 
 const app = initializeApp(CONFIG);
