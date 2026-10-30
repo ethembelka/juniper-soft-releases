@@ -103,11 +103,28 @@ function render() {
   const rows = LICENCES.filter(l =>
     (!st || (l.status || "active") === st) &&
     (!q || [l.id, l.customer_name, l.username].some(v => String(v || "").toLocaleLowerCase("tr").includes(q))));
-  const stale = LICENCES.filter(l => l.token_reissue_needed).length;
-  $("warnStale").hidden = !stale;
+  const stale = LICENCES.filter(needsToken).length;
   $("staleCount").textContent = stale;
   const signer = signerUrl();
-  $("btnStaleAll").disabled = !signer;
+  $("btnStaleAll").disabled = !signer || !stale;
+  const attn = LICENCES.map(l => ({ l, is: issues(l).filter(i => i.lvl !== "info") }))
+    .filter(x => x.is.length)
+    .sort((a, b) => RANK[a.is[0].lvl] - RANK[b.is[0].lvl] || (a.l.customer_name || "").localeCompare(b.l.customer_name || "", "tr"));
+  $("attn").hidden = !attn.length;
+  $("attnCount").textContent = attn.length;
+  $("attnList").innerHTML = attn.map(({ l, is }) =>
+    '<div class="attn-row"><span class="who-c" data-open="' + esc(l.id) + '">' + esc(l.customer_name || l.id) + "</span>"
+    + is.map(i => '<span class="chip ' + i.lvl + '" title="' + esc(i.hint) + '">' + esc(i.text) + "</span>").join("")
+    + '<span class="grow"></span>'
+    + (is.some(i => i.fix === "token") && l.machine_id
+        ? '<button class="btn sm" data-sign="' + esc(l.id) + '"' + (signer ? "" : " disabled") + ">🔏 İmzala</button>" : "")
+    + "</div>").join("");
+  document.querySelectorAll("[data-sign]").forEach(b => b.addEventListener("click", async e => {
+    e.stopPropagation();
+    b.disabled = true; b.textContent = "İmzalanıyor…";
+    try { await reissue(b.dataset.sign); render(); }
+    catch (err) { b.disabled = false; b.textContent = "🔏 İmzala"; alert("İmzalanamadı: " + err.message); }
+  }));
   $("signerInfo").textContent = signer
     ? "İmzalama servisi: " + signer
     : "İmzalama servisi tanımlı değil — üstteki ⚙ Servis düğmesinden adresi girin.";
@@ -118,6 +135,14 @@ function render() {
     el.addEventListener("click", () => openEdit(el.dataset.open)));
 }
 
+function seenHtml(l) {
+  const seen = lastSeen(l), sd = daysSince(seen);
+  if (sd == null) return '<span class="muted small">son görülme: —</span>';
+  const cls = sd >= GRACE_DAYS ? "seen-bad" : sd >= 4 ? "seen-warn" : "seen-ok";
+  const rel = sd === 0 ? "bugün" : sd + " gün önce";
+  return '<span class="small ' + cls + '" title="' + esc(fmt(seen)) + '">son görülme: ' + rel + "</span>";
+}
+
 function card(l) {
   const mods = MODULES.filter(([k]) => l[k]).map(([, lbl]) => '<span class="chip">' + lbl + "</span>").join("");
   const status = l.status || "active";
@@ -125,14 +150,144 @@ function card(l) {
     + '<div class="row-main"><b>' + esc(l.customer_name || "(isimsiz)") + "</b>"
     + '<span class="key">' + esc(l.id) + "</span>"
     + '<div class="chips">' + mods
-    + (!l.password_hash ? '<span class="chip bad" title="Müşteri programa giriş yapamaz">şifre yok</span>' : "")
-    + (l.token_reissue_needed ? '<span class="chip warn">token yenilenmeli</span>' : "") + "</div></div>"
+    + issues(l).map(i => '<span class="chip ' + i.lvl + '" title="' + esc(i.hint) + '">' + esc(i.text) + "</span>").join("")
+    + "</div></div>"
     + '<div class="row-side"><span class="pill ' + status + '">' + label(status) + "</span>"
     + '<span class="muted">' + (l.valid_until ? esc(String(l.valid_until).slice(0, 10)) : "süresiz") + "</span>"
     + '<span class="muted small">' + (l.machine_id ? "kurulu" : "aktive edilmedi") + "</span>"
-    + '<span class="muted small">son giriş: ' + esc(fmt(l.last_online_auth)) + "</span></div></article>";
+    + seenHtml(l) + (l.app_version ? '<span class="muted small">v' + esc(l.app_version) + "</span>" : "")
+    + "</div></article>";
 }
 const label = s => ({ active: "Aktif", suspended: "Askıda", revoked: "İptal" })[s] || s;
+
+// ── Sağlık kontrolü ─────────────────────────────────────────────────────────
+// Uygulama ile AYNI sabit (core/license.GRACE_DAYS): internetsiz en fazla bu kadar gün.
+const GRACE_DAYS = 7;
+const DAY = 86400000;
+let LATEST = "";      // GitHub'daki son sürüm (eski sürüm uyarısı için)
+fetch("https://api.github.com/repos/ethembelka/juniper-soft-releases/releases/latest")
+  .then(r => r.ok ? r.json() : null)
+  .then(j => { if (j && j.tag_name) { LATEST = String(j.tag_name).replace(/^v/, ""); if (LICENCES.length) render(); } })
+  .catch(() => {});
+
+const toDate = v => {
+  if (!v) return null;
+  const d = typeof v === "object" && v.seconds ? new Date(v.seconds * 1000) : new Date(String(v));
+  return isNaN(d) ? null : d;
+};
+const daysSince = d => d ? Math.floor((Date.now() - d.getTime()) / DAY) : null;
+const verLt = (a, b) => {
+  const pa = String(a || "").split(".").map(Number), pb = String(b || "").split(".").map(Number);
+  for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0); }
+  return false;
+};
+// Token içeriği (imzası doğrulanmaz — yalnız gösterim/karşılaştırma için okunur)
+function tokenPayload(tok) {
+  try {
+    const b = String(tok).split(".")[0].replace(/-/g, "+").replace(/_/g, "/");
+    const bin = atob(b + "===".slice((b.length + 3) % 4));
+    return JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0))));
+  } catch { return null; }
+}
+// Programın en son haber verdiği an: 'client.seen_at' (v1.10+) ya da 'last_online_auth'
+function lastSeen(l) {
+  const ds = [toDate(l.last_online_auth), toDate(l.client && l.client.seen_at)].filter(Boolean);
+  return ds.length ? new Date(Math.max(...ds.map(d => d.getTime()))) : null;
+}
+const NET_TEXT = {
+  dns: "DNS (sunucu adı çözülemedi)", ssl: "SSL (antivirüs/güvenlik duvarı HTTPS denetimi ya da yanlış saat)",
+  timeout: "zaman aşımı", proxy: "proxy engeli", conn: "bağlantı kurulamadı", http: "sunucu hatası", other: "bilinmeyen",
+};
+const TOKEN_TEXT = {
+  ok: "geçerli", none: "yok", invalid: "bozuk/okunamıyor", other_key: "başka lisansa ait",
+  fp_mismatch: "bu bilgisayara ait değil",
+};
+
+/* Her lisans için sorun listesi: {lvl: bad|warn|info, text, hint, fix: "token"|null}.
+   bad  = müşteri şu an ya da yakında programı açamayabilir
+   warn = yakında sorun çıkabilir / yönetici işlemi bekliyor
+   info = bilgi (eski sürüm, geçmiş bağlantı sorunu) */
+function issues(l) {
+  const out = [];
+  const add = (lvl, text, hint = "", fix = null) => out.push({ lvl, text, hint, fix });
+  const status = l.status || "active";
+  if (status !== "active") return out;
+  const tp = l.license_token ? tokenPayload(l.license_token) : null;
+  const fp = l.fingerprint || {};
+  const cl = l.client || {};
+  const seen = lastSeen(l), sd = daysSince(seen);
+
+  if (!l.password_hash || !l.username)
+    add("bad", "Giriş bilgisi eksik — müşteri programa giriş yapamaz",
+        "Kullanıcı adı ve şifre belirleyip Kaydet'e basın.");
+
+  if (!l.machine_id) {
+    const cd = daysSince(toDate(l.created_at));
+    if (l.activated_at === "" && l.last_online_auth)
+      add("warn", "Makine kaydı yok — program bir sonraki açılışta bilgisayarı kaydedecek",
+          "Kayıt gelince token imzalayın. (v1.10+ kendiliğinden kaydeder; eski sürümde müşterinin lisans anahtarını yeniden girmesi gerekir.)");
+    else
+      add(cd != null && cd >= 3 ? "warn" : "info", "Henüz kurulmadı (aktivasyon bekleniyor)");
+  } else {
+    if (!l.license_token)
+      add("bad", "Token yok — program internet olmadan AÇILMAZ",
+          "Çevrimdışı çalışma izni verilmemiş. Bilgisayar internete bağlanmadan açılırsa müşteri 'İnternet Bağlantısı Gerekli' ekranını görür.", "token");
+    else if (!tp)
+      add("bad", "Token okunamıyor", "Yeniden imzalayın.", "token");
+    else {
+      if (tp.key && tp.key !== l.id) add("bad", "Token başka bir lisansa ait", "", "token");
+      const tfp = tp.fp || {};
+      const mism = ["guid", "vol"].filter(k => tfp[k] && fp[k] && tfp[k] !== fp[k]);
+      if (mism.length)
+        add("bad", "Token başka bir bilgisayar için imzalanmış (makine değişmiş)",
+            "Kayıtlı bilgisayarla eşleşmiyor (" + mism.join(", ") + "). Yeniden imzalayın.", "token");
+      if ((tp.valid_until || "") !== String(l.valid_until || "").slice(0, 10) && !l.token_reissue_needed)
+        add("warn", "Token'daki bitiş tarihi lisanstakinden farklı (" + (tp.valid_until || "süresiz") + ")",
+            "İnternetsiz çalışırken eski tarih geçerli olur.", "token");
+    }
+    if (l.token_reissue_needed)
+      add("warn", "Token yenilenmeli (modül/süre/durum değişti)",
+          "Değişiklik internetsiz çalışan programa ancak yeni token'la geçer.", "token");
+    if (cl.token && cl.token !== "ok" && !(cl.token === "none" && !l.license_token))
+      add("bad", "Program token'ı kullanamıyor: " + (TOKEN_TEXT[cl.token] || cl.token),
+          "Programın son bildirimi (" + fmt(cl.seen_at) + "). Yeniden imzalayın.", "token");
+
+    if (sd != null) {
+      const left = GRACE_DAYS - sd;
+      // v1.10 öncesi program 'son görülme'yi YALNIZ patron şifreyle girişte yazıyordu →
+      // eski sürümde uzun sessizlik kullanılmadığı anlamına gelmez; kırmızı gösterme.
+      const reliable = !!l.app_version;
+      if (sd >= GRACE_DAYS)
+        add(reliable && l.license_token ? "bad" : "warn", sd + " gündür programdan haber yok",
+            !reliable ? "Eski sürüm: bu bilgi yalnız şifreyle girişte güncellenir; program kullanılıyor olabilir."
+              : l.license_token ? "İnternetsiz kullanıyorsa " + GRACE_DAYS + " günlük süre dolmuştur — müşteriyi arayın."
+              : "Program kullanılmıyor ya da sunucuya ulaşamıyor.");
+      else if (sd >= 4 && l.license_token && reliable)
+        add("warn", sd + " gündür programdan haber yok",
+            "İnternetsiz kullanıyorsa yaklaşık " + left + " gün sonra 'İnternet Bağlantısı Gerekli' ekranı çıkar.");
+    } else {
+      add("info", "Programdan hiç haber alınmadı");
+    }
+  }
+
+  const vu = toDate(l.valid_until);
+  if (vu) {
+    const dl = Math.ceil((vu.getTime() - Date.now()) / DAY);
+    if (dl < 0) add("bad", "Lisans süresi doldu (" + String(l.valid_until).slice(0, 10) + ")");
+    else if (dl <= 30) add("warn", "Lisans " + dl + " gün sonra bitiyor (" + String(l.valid_until).slice(0, 10) + ")");
+  }
+  if (cl.net_error) {
+    const until = toDate(cl.net_error_until);
+    if (!until || daysSince(until) <= 14)
+      add("info", "Bağlantı sorunu yaşadı: " + (NET_TEXT[cl.net_error] || cl.net_error),
+          fmt(cl.net_error_since) + " → " + fmt(cl.net_error_until) + (cl.net_error_text ? " · " + cl.net_error_text : ""));
+  }
+  if (LATEST && l.app_version && verLt(l.app_version, LATEST))
+    add("info", "Eski sürüm: " + l.app_version + " (güncel " + LATEST + ")");
+  return out;
+}
+const needsToken = l => issues(l).some(i => i.fix === "token") && !!l.machine_id;
+const RANK = { bad: 0, warn: 1, info: 2 };
 
 // ── Düzenleme ───────────────────────────────────────────────────────────────
 function openEdit(id) {
@@ -158,13 +313,25 @@ function openEdit(id) {
     '<label class="mod"><input type="checkbox" data-mod="' + k + '"' + (current[k] ? " checked" : "") + "><span>" + lbl + "</span></label>").join("");
   $("fNotes").value = current.notes || "";
   $("rawDoc").textContent = rawView(current);
+  const is = issues(current);
+  $("issues").innerHTML = is.length
+    ? is.map(i => '<div class="issue ' + i.lvl + '">' + esc(i.text) + (i.hint ? "<small>" + esc(i.hint) + "</small>" : "") + "</div>").join("")
+    : (current.status || "active") === "active" ? '<div class="issue info">✓ Sorun görünmüyor</div>' : "";
+  const cl = current.client || {};
+  const tp = current.license_token ? tokenPayload(current.license_token) : null;
+  const seen = lastSeen(current), sd = daysSince(seen);
   $("meta").innerHTML = [
     ["Makine", current.machine_id || "—"],
+    ["Son görülme", seen ? fmt(seen) + " (" + (sd === 0 ? "bugün" : sd + " gün önce") + ")" : "—"],
+    ["Program sürümü", current.app_version || "— (v1.10 öncesi)"],
+    ["Programın bildirdiği durum", cl.status ? cl.status + " · token " + (TOKEN_TEXT[cl.token] || cl.token || "—") : "—"],
     ["Yüklenen PDF / etiket", (current.total_pdfs_uploaded || 0) + " / " + (current.total_labels_printed || 0)],
     ["Aktivasyon", fmt(current.activated_at)],
-    ["Son çevrimiçi giriş", fmt(current.last_online_auth)],
     ["Token", current.license_token ? (current.token_reissue_needed ? "var (yenilenmeli)" : "var") : "yok"],
+    ["Token bitişi", tp ? (tp.valid_until || "süresiz") : "—"],
     ["Token imzalandı", fmt(current.token_issued_at)],
+    ["Son bağlantı sorunu", cl.net_error ? (NET_TEXT[cl.net_error] || cl.net_error) + " · " + fmt(cl.net_error_since) + " → " + fmt(cl.net_error_until) : "—"],
+    ["İşletim sistemi", cl.os || "—"],
     ["Giriş şifresi", current.password_hash ? "tanımlı" : "yok"],
     ["Parmak izi", Object.keys(current.fingerprint || {}).length
        ? Object.entries(current.fingerprint).map(([k, v]) => k + "=" + v).join(" · ") : "yok"],
@@ -173,7 +340,7 @@ function openEdit(id) {
   const signer = signerUrl();
   $("btnToken").disabled = !signer || !current.machine_id;
   $("btnToken").title = !signer ? "Önce ⚙ Servis adresini girin"
-    : (!current.machine_id ? "Lisans henüz aktive edilmedi" : "");
+    : (!current.machine_id ? "Makine kaydı yok — program açılınca bilgisayar kaydedilir, sonra imzalayın" : "");
   $("editErr").textContent = ""; $("editOk").textContent = "";
   $("editOverlay").hidden = false;
 }
@@ -239,7 +406,7 @@ on("btnToken", "click", async () => {
 });
 
 on("btnStaleAll", "click", async () => {
-  const list = LICENCES.filter(l => l.token_reissue_needed);
+  const list = LICENCES.filter(needsToken);
   $("btnStaleAll").disabled = true;
   const fails = [];
   for (const l of list) {
@@ -292,8 +459,10 @@ on("btnReset", "click", async () => {
       machine_id: "", fingerprint: {}, license_token: "",
       token_reissue_needed: false, activated_at: "", updated_at: serverTimestamp(),
     });
-    Object.assign(current, { machine_id: "", license_token: "", token_reissue_needed: false });
-    $("editOk").textContent = "✓ Makine kaydı silindi";
+    Object.assign(current, { machine_id: "", license_token: "", token_reissue_needed: false,
+                             fingerprint: {}, activated_at: "" });
+    $("editOk").textContent = "✓ Makine kaydı silindi — program bir sonraki açılışta bilgisayarı "
+      + "kendiliğinden kaydeder (v1.10+). Kayıt gelince bu ekrandan token imzalayın.";
     openEdit(current.id); render();
   } catch (e) { $("editErr").textContent = "Sıfırlama: " + (e.code || e.message); }
 });

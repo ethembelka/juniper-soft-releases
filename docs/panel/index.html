@@ -57,13 +57,17 @@
     <button class="btn" id="btnReload">Yenile</button>
   </section>
 
-  <section id="warnStale" class="warn" hidden>
-    <b>Token yenilenmeli.</b> Modül, süre ya da durum değiştirdiğiniz
-    <span id="staleCount">0</span> lisans var. Değişikliğin internetsiz çalışan
-    müşteriye de geçmesi için token yeniden imzalanmalı.
-    <button class="btn" id="btnStaleAll" style="margin-left:10px">Hepsini imzala</button>
+  <!-- Dikkat gerektirenler: her lisansın sağlık kontrolü (panel.js:issues) -->
+  <section id="attn" class="attn" hidden>
+    <div class="attn-head">
+      <b>Dikkat gerektiren <span id="attnCount">0</span> lisans</b>
+      <span class="grow"></span>
+      <button class="btn" id="btnStaleAll" title="Token'ı eksik, eski ya da başka makineye ait olan tüm lisansları imzalar">🔏 Token gerekenlerin hepsini imzala (<span id="staleCount">0</span>)</button>
+    </div>
+    <div id="attnList"></div>
     <div class="muted small" id="signerInfo" style="margin-top:6px"></div>
   </section>
+  <section id="warnStale" hidden></section>
 
   <section class="list" id="list"></section>
 </main>
@@ -75,6 +79,7 @@
       <div><h2 id="editKey">—</h2><span class="muted" id="editSub"></span></div>
       <button class="btn ghost" id="btnClose">Kapat</button>
     </div>
+    <div class="issues" id="issues"></div>
     <div class="grid">
       <label>Müşteri adı<input class="input" id="fCustomer" /></label>
       <label>Kullanıcı adı <small>müşterinin programa girişi</small><input class="input" id="fUsername" autocomplete="off" /></label>
