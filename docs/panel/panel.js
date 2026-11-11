@@ -30,6 +30,10 @@ const MODULES = [
   ["module_history_edit", "Geçmişte düzenleme"],
   ["module_pricing", "Fiyatlandırma"],
   ["module_cnc", "CNC kesim dosyası"],
+  ["module_kesim", "Kesim planı"],
+  ["module_stok", "Stok"],
+  ["module_cari", "Cari hesap"],
+  ["module_fatura", "Fatura (e-fatura/e-arşiv)"],
 ];
 // Değişince müşterinin token'ı bayatlar (offline doğrulama eski değeri taşır)
 const TOKEN_FIELDS = new Set([...MODULES.map(m => m[0]), "valid_until", "status"]);
@@ -499,7 +503,8 @@ on("btnNew", "click", async () => {
     machine_id: "", activated_at: "", fingerprint: {}, license_token: "",
     company: {}, valid_until: "", last_online_auth: "",
     module_order_history: false, module_history_edit: false,
-    module_pricing: false, module_cnc: false, token_reissue_needed: false,
+    module_pricing: false, module_cnc: false, module_kesim: false, module_stok: false, module_cari: false, module_fatura: false,
+    token_reissue_needed: false,
     total_pdfs_uploaded: 0, total_labels_printed: 0, notes: "",
     created_at: serverTimestamp(),
   };
